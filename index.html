@@ -172,7 +172,7 @@ input.in:focus,select.in:focus{outline:2px solid var(--accent);border-color:tran
       <button class="btn pri wide" data-action="export">Exportar respaldo (JSON)</button>
       <button class="btn wide" data-action="import">Importar respaldo (JSON)</button>
       <input type="file" id="importFile" accept="application/json,.json" hidden>
-      <button class="btn del wide" data-action="reset">Restablecer datos de ejemplo</button>
+      <button class="btn del wide" data-action="wipe">Borrar todos mis datos</button>
       <p class="note">Tus datos se guardan solo en este navegador (localStorage). Exporta un respaldo de vez en cuando, sobre todo antes de borrar el historial del navegador o cambiar de dispositivo.</p>
     </div>
   </section>
@@ -198,7 +198,7 @@ input.in:focus,select.in:focus{outline:2px solid var(--accent);border-color:tran
 'use strict';
 var KEY = 'misFinanzas.v1';
 var fmt = new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN',minimumFractionDigits:0,maximumFractionDigits:0});
-function money(n){ return fmt.format(Math.round(n||0)); }
+function money(n){ n=+n; return fmt.format(isFinite(n)?Math.round(n):0); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 function pad(n){ return (n<10?'0':'')+n; }
@@ -214,25 +214,12 @@ var monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
 var monthEnd = new Date(today.getFullYear(), today.getMonth()+1, 0);
 var MS = iso(monthStart), ME = iso(monthEnd);
 
-function seed(){
-  // Datos iniciales tomados de la captura (10 oct 2026). Montos agregados, sin pagos inventados.
-  return {
-    version:1,
-    plan:{ ingresoMensual:36000, ahorroMeta:3000 },
-    metas:[ { id:uid(), nombre:'Metas (por detallar)', monto:1818 } ],
-    movimientos:[
-      { id:uid(), tipo:'ingreso', monto:19000, concepto:'Ingresos recibidos (saldo inicial)', categoria:'Sueldo', fecha:'2026-10-01' },
-      { id:uid(), tipo:'gasto',   monto:13465, concepto:'Gastos previos', categoria:'Varios', fecha:'2026-10-01' },
-      { id:uid(), tipo:'ahorro',  monto:3000,  concepto:'Ahorro del mes', categoria:'Ahorro', fecha:'2026-10-01' }
-    ],
-    pagos:[
-      { id:uid(), concepto:'Pagos por venir (por detallar)', monto:9184, fecha:'2026-10-15', pagado:false, mensual:false }
-    ]
-  };
+function empty(){
+  return { version:1, plan:{ ingresoMensual:0, ahorroMeta:0 }, metas:[], movimientos:[], pagos:[] };
 }
 function load(){
   try{ var s=JSON.parse(localStorage.getItem(KEY)); if(s && s.plan && Array.isArray(s.movimientos)) return normalize(s); }catch(e){}
-  return seed();
+  return empty();
 }
 function normalize(s){
   s.plan = s.plan||{}; s.plan.ingresoMensual=+s.plan.ingresoMensual||0; s.plan.ahorroMeta=+s.plan.ahorroMeta||0;
@@ -267,11 +254,12 @@ function calc(){
 function render(){
   var c=calc();
   $('todayLbl').textContent='Hoy es '+DOW[today.getDay()]+' '+today.getDate()+' de '+MON[today.getMonth()]+'.';
-  var d=$('dailyAmt'); d.textContent=money(Math.max(0,c.diario)); d.classList.toggle('neg', c.diario<0);
+  var d=$('dailyAmt'); d.textContent=money(isFinite(c.diario)?Math.max(0,c.diario):0); d.classList.toggle('neg', c.diario<0);
   $('heroText').innerHTML = c.libres>=0
     ? 'Quedan '+money(c.libres)+' libres para '+c.dias+(c.dias===1?' día':' días')+', después de apartar '+money(c.pag)+' de pagos por venir y '+money(c.metas)+' para tus metas.'
     : 'Te faltan '+money(-c.libres)+' para cubrir '+money(c.pag)+' de pagos por venir y '+money(c.metas)+' para tus metas en los '+c.dias+' días que quedan.';
   if(c.gasHoy>0) $('heroText').innerHTML += ' Hoy llevas '+money(c.gasHoy)+' gastados.';
+  if(!(S.plan.ingresoMensual>0) && !(c.ing>0)) $('heroText').innerHTML = '¡Bienvenida! Para empezar, escribe tu <b>ingreso mensual</b> en <a href="#" data-action="goPlan" style="color:#2a5d93;font-weight:700">Plan</a>, o registra un ingreso con “+ Ingreso”. Después agrega tus pagos y metas para saber cuánto puedes gastar cada día.';
   $('incomeChip').textContent='Ingreso mensual: '+money(S.plan.ingresoMensual);
   $('formula').innerHTML =
     (c.base===S.plan.ingresoMensual?'Ingreso mensual ':'Ingresos registrados ')+money(c.base)+
@@ -426,7 +414,7 @@ var A={
     S.metas=S.metas.filter(function(x){return x.id!==m.id;}); save(); render(); },
   savePlan:function(){ var a=num('pIngreso'), b=num('pAhorro'); if(!(a>=0)||!(b>=0)) return toast('Revisa los montos');
     S.plan.ingresoMensual=a; S.plan.ahorroMeta=b; save(); $('pIngreso').blur(); $('pAhorro').blur(); render(); toast('Plan guardado'); },
-  goPlan:function(){ tab('plan'); },
+  goPlan:function(){ tab('plan'); setTimeout(function(){ $('pIngreso').focus(); },50); },
   toggleFormula:function(){ $('hero').classList.toggle('open'); },
   selDay:function(el){ selDay=el.dataset.f; renderStrip(); },
   export:function(){
@@ -434,7 +422,9 @@ var A={
     var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='mis-finanzas-respaldo-'+TODAY+'.json';
     document.body.appendChild(a); a.click(); setTimeout(function(){URL.revokeObjectURL(a.href); a.remove();},500); toast('Respaldo descargado'); },
   import:function(){ $('importFile').click(); },
-  reset:function(){ if(!confirm('Esto borra tus datos y vuelve a los de ejemplo. ¿Continuar?')) return; S=seed(); save(); render(); toast('Datos restablecidos'); }
+  wipe:function(){ if(!confirm('Esto borra permanentemente todos tus movimientos, pagos, metas y tu plan en este navegador. ¿Continuar?')) return;
+    if(!confirm('¿Seguro? Si no tienes un respaldo exportado, no podrás recuperarlos.')) return;
+    S=empty(); save(); render(); toast('Datos borrados'); }
 };
 function find(arr,id){ for(var i=0;i<arr.length;i++) if(arr[i].id===id) return arr[i]; return null; }
 function $(id){ return document.getElementById(id); }
@@ -449,7 +439,7 @@ function tab(name){
 
 document.addEventListener('click',function(e){
   var t=e.target.closest('[data-tab]'); if(t){ tab(t.dataset.tab); return; }
-  var a=e.target.closest('[data-action]'); if(a && A[a.dataset.action]){ A[a.dataset.action](a); return; }
+  var a=e.target.closest('[data-action]'); if(a && A[a.dataset.action]){ if(a.tagName==='A') e.preventDefault(); A[a.dataset.action](a); return; }
   if(e.target===$('modal')) closeModal();
 });
 document.addEventListener('keydown',function(e){ if(e.key==='Escape') closeModal(); });
